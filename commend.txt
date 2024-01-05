@@ -1,0 +1,1 @@
+﻿./scripts/finetune_with_accelerate.sh > output_1_4.log 2>&1

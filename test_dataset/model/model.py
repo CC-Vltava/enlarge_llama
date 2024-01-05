@@ -1,11 +1,10 @@
-﻿from transformers import AutoModelForCausalLM, AutoModel, AutoTokenizer, BertConfig, BertModel, XLMRobertaModel
+﻿from transformers import AutoModelForCausalLM, AutoModel, AutoTokenizer, BertConfig, BertModel
 from torch.cuda.amp import autocast as autocast
 import torch.nn as nn
 import torch
-import torch.nn.functional as F
 
 from typing import Optional
-from new_model.proj import proj
+from model.proj import proj
 from transformers import StoppingCriteria, StoppingCriteriaList
 from fairseq import utils
 
@@ -13,9 +12,11 @@ from fairseq import utils
 class GPT(nn.Module):
     def __init__(
             self,
-            llama_model_path='/home/cchuan/Project/qlora/tiny_llama/',
+            llama_model_path='/data1/cchuan/data/weight/tiny_llama/',
             # llama_model_path='/data1/cchuan/data/weight/tiny_llama/',
             xlmr_model_path='/data1/cchuan/data/weight/xlmr/',
+            num_attention_heads=8,
+            num_hidden_layers=2,
             mid_hidden_size=512,
         ):
         super(GPT, self).__init__()
@@ -25,11 +26,12 @@ class GPT(nn.Module):
 
         feature_size = self.xlmr.config.hidden_size
 
-        self.proj = proj(
-            input_size=feature_size,
-            output_size=self.llama_model.config.hidden_size,
-            mid_hidden_size=mid_hidden_size,
-            num_hidden_layers=len(self.xlmr.encoder.layer) + 1
+        self.proj = proj(            
+            feature_size=feature_size,
+            hidden_state_size=self.llama_model.config.hidden_size,
+            num_attention_heads=num_attention_heads,
+            num_hidden_layers=num_hidden_layers,
+            mid_hidden_size=mid_hidden_size
         )
 
         for param in self.xlmr.parameters():
@@ -52,15 +54,14 @@ class GPT(nn.Module):
     def resize_token_embeddings(self, size):
         self.llama_model.resize_token_embeddings(size)
 
-    def generate(self, input_ids, attention_mask, max_new_tokens=30):
+    def generate(self, input_ids, attention_mask):
 
-        hidden_states = self.xlmr(
+        features = self.xlmr(
             input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True
-        ).hidden_states
+            attention_mask=attention_mask
+        ).last_hidden_state
 
-        llama_input_embs = self.proj(hidden_states)
+        llama_input_embs = self.proj(features)
 
         # output_file_path = '/data1/cchuan/input.txt'
 
@@ -76,7 +77,7 @@ class GPT(nn.Module):
 
         generate_ids = self.llama_model.generate(
             inputs_embeds=llama_input_embs,
-            max_new_tokens=max_new_tokens,
+            max_new_tokens=30,
             # stopping_criteria=self.stopping_criteria,
             num_beams=1,
             do_sample=True,
@@ -90,84 +91,40 @@ class GPT(nn.Module):
         return generate_ids
         
 
-    def calc_MSE_loss(self, model, input, sec_input, label):
-        final_input = torch.cat([input, sec_input], dim=1)
-        
-        shape = final_input.shape
-        input_length = input.shape[1]
-        label_length = sec_input.shape[1]
-
-        attention_mask = torch.zeros([shape[0], shape[1]])
-        attention_mask[:, :input_length] = 1
-        # print('final input {}'.format(final_input.shape))
-        output = torch.stack(
-            model(
-                input_ids=final_input,
-                attention_mask=attention_mask,
-                return_dict=True,
-                output_hidden_states=True
-            ).hidden_states
-        )
-
-        # print('ccccccc')
-        # print(output.shape, label.shape)
-        # print(output[:, :, -label_length: ].shape, label[:, :, -label_length: ].shape)
-
-        mse_loss = F.mse_loss(output[-1, :, -label_length: ], label[-1, :, -label_length: ])
-
-        return mse_loss
-
-
     def forward(
         self,
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.LongTensor] = None,
         sec_input_ids: torch.float = None,
-        llama_input: torch.float = None,
     ):
         
-        hidden_states = self.xlmr(
+        features = self.xlmr(
             input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True
-        ).hidden_states
+            attention_mask=attention_mask
+        ).last_hidden_state
 
-        input_embed = self.proj(hidden_states)
-        input_length = input_embed.shape[1]
+        llama_input_ids = self.proj(features)
 
         sec_input_embed = self.llama_model.model.embed_tokens(sec_input_ids)\
-            .to(input_embed.dtype)
+            .to(llama_input_ids.dtype)
 
-        llama_input_embed = torch.cat([input_embed, sec_input_embed], dim=1)
+        llama_input_embed = torch.cat([llama_input_ids, sec_input_embed], dim=1)
 
         shape = llama_input_embed.shape
 
         attention_mask = torch.zeros([shape[0], shape[1]])
-        attention_mask[:, :input_length] = 1
+        attention_mask[:, :llama_input_ids.shape[1]] = 1
 
         outputs = self.llama_model(
             inputs_embeds=llama_input_embed,
             # 这里的attention需要修改
             attention_mask=attention_mask,
             return_dict=True,
-            output_hidden_states=True,
             labels=labels
         )
 
-        # print('here!!!')
-        # print('llama_input {}'.format(llama_input.shape))
-        # print('input {}'.format(input_embed.shape))
-        # print('sec_input {}'.format(sec_input_ids.shape))
-        # print('label {}'.format(labels.shape))
-        # print('output {}'.format(outputs.hidden_states[-1].shape))
-        MSE_loss = self.calc_MSE_loss(self.llama_model, llama_input, sec_input_ids, torch.stack(outputs.hidden_states))
-
-        my_lambda = 4
-        # print('compare')
-        # print(outputs.loss, MSE_loss)
-
-        return outputs.loss + my_lambda * MSE_loss
+        return outputs
     
 
     

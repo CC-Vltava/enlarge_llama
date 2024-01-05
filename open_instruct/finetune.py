@@ -42,11 +42,40 @@ from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_tr
 
 logger = get_logger(__name__)
 
-def read_data():
+def read_data_wiki():
     data_list = []
 
-    data_path = '/data1/cchuan/data/mllm/clean_data1.json'
+    data_path = '/data1/cchuan/wiki_data/wiki_0001_.json'
+    print('wiki dataset')
+    print(data_path)
 
+    with open(data_path, 'r') as file:
+        data_list = json.load(file)
+    # print(data_list)
+    # print(len(data_list))
+    print('raw data size')
+    print(len(data_list['train']))
+
+    formatted_data = {
+        "train": [{"prompt": item["input"], "completion": item["output"]} for item in data_list['train']],
+        "test": [{"prompt": item["input"], "completion": item["output"]} for item in data_list['validation']],
+    }
+
+    save_data_path = '/data1/cchuan/output_file.json'
+
+    with open(save_data_path, 'w') as json_file:
+        json.dump(formatted_data, json_file, indent=4)
+    
+    # raise 'error'
+    print('finish reading')
+
+    return load_dataset('json', data_files=save_data_path, field='train')
+
+def read_data_tulu():
+    data_list = []
+
+    data_path = '/data1/cchuan/tulu/tulu.json'
+    print('tulu dataset')
     with open(data_path, 'r') as file:
         for line in file:
             data = json.loads(line)
@@ -69,6 +98,20 @@ def read_data():
 
     return load_dataset('json', data_files=save_data_path, field='train')
 
+def preprocess_function(examples):
+    inputs = str(examples['instruction']) + " " + str(examples['input'])
+    outputs = str(examples['output'])
+    return {'prompt': inputs, 'completion': outputs}
+
+def read_data_tiger():
+    print('tiger dataset')
+    print('start reading tiger data')
+    ds_sft = datasets.load_dataset('/data1/cchuan/dataset/tiger_data')
+    print('start processing tiger data')
+    return ds_sft.map(
+        preprocess_function,
+        num_proc=16
+    )
 
 def collate_fn(batch):
     # batch是一个包含单个样本的列表，每个样本是一个字典{'input': input_sequence, 'labels': target_sequence}
@@ -78,12 +121,14 @@ def collate_fn(batch):
     labels = [item['labels'] for item in batch]
     atts = [item['attention_mask'] for item in batch]
     input2 = [item['sec_input_ids'] for item in batch]
+    llama_input = [item['llama_input'] for item in batch]
 
     return {
         'input_ids': torch.stack(inputs), 
         'labels': torch.stack(labels), 
         'attention_mask': torch.stack(atts),
-        'sec_input_ids':  torch.stack(input2)
+        'sec_input_ids':  torch.stack(input2),
+        'llama_input': torch.stack(llama_input)
     }
 
 
@@ -296,6 +341,7 @@ def encode_with_prompt_completion_format(example, encode_tokenizer, decode_token
     # print('here!!!-------------****************')
     # print(example)
 
+    # xlmr中自己带有eos token
     input_ids1 = encode_tokenizer(
         example['prompt'], 
         return_tensors='pt', 
@@ -306,6 +352,14 @@ def encode_with_prompt_completion_format(example, encode_tokenizer, decode_token
 
     input_ids2 = decode_tokenizer(
         example['completion'] + decode_tokenizer.eos_token, 
+        return_tensors='pt', 
+        max_length=max_seq_length, 
+        truncation=True,
+        padding='longest'
+    )['input_ids']
+
+    input_ids3 = decode_tokenizer(
+        example['prompt'] + decode_tokenizer.eos_token, 
         return_tensors='pt', 
         max_length=max_seq_length, 
         truncation=True,
@@ -343,6 +397,7 @@ def encode_with_prompt_completion_format(example, encode_tokenizer, decode_token
         'attention_mask': attention_mask.flatten(),
         'sec_input_ids': input_ids2.flatten(),
         'language': is_english(example['prompt']) and is_english(example['completion']),
+        'llama_input': input_ids3.flatten(),
         'input': example['prompt'],
         'output': example['completion']
     }
@@ -397,7 +452,7 @@ def main():
     accelerator.wait_for_everyone()
 
 
-    raw_datasets = read_data()
+    raw_datasets = read_data_wiki()
 
     model = GPT()
 
@@ -455,6 +510,8 @@ def main():
     if len(decode_tokenizer) > embedding_size:
         model.resize_token_embeddings(len(decode_tokenizer))
 
+    for param in model.llama_model.parameters():
+        param.requires_grad = False
 
     # # no default pad token for llama!
     # # here we add all special tokens again, because the default ones are not in the special_tokens_map
@@ -601,6 +658,15 @@ def main():
         model, optimizer, train_dataloader, lr_scheduler
     )
 
+    print('here cc nb')
+    print(model.device)
+    print(model.proj.para.ccsb.device)
+    cnt = 0
+    for param in model.proj.para.parameters():
+        print(param)
+        cnt += 1
+    print('total para {}'.format(cnt))
+
     # save_with_accelerate(accelerator, model, '/data1/cchuan/test/')
 
     # return
@@ -694,8 +760,8 @@ def main():
             active_dataloader = train_dataloader
         for step, batch in enumerate(active_dataloader):
             with accelerator.accumulate(model):
-                outputs = model(**batch)   
-                loss = outputs.loss
+                loss = model(**batch)   
+                # loss = outputs.loss
                 # We keep track of the loss at each logged step
                 total_loss += loss.detach().float()
                 accelerator.backward(loss)

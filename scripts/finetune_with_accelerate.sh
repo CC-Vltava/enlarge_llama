@@ -1,7 +1,7 @@
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5
 
 MODEL_SIZE=7B
-NUM_GPUS=4
+NUM_GPUS=6
 BATCH_SIZE_PER_GPU=1
 TOTAL_BATCH_SIZE=256
 GRADIENT_ACC_STEPS=$(($TOTAL_BATCH_SIZE/$NUM_GPUS/$BATCH_SIZE_PER_GPU))
@@ -28,7 +28,7 @@ accelerate launch \
     --warmup_ratio 0.03 \
     --weight_decay 0.01 \
     --num_train_epochs 8 \
-    --output_dir /data1/cchuan/model_weight/11.17_GPT_${MODEL_SIZE}/ \
+    --output_dir /data1/cchuan/model_weight/1.4_GPT_${MODEL_SIZE}/ \
     --with_tracking \
     --report_to tensorboard \
     --logging_steps 1
