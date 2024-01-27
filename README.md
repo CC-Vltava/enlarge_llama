@@ -18,5 +18,7 @@ Train:
 ```
 
 在new_models/model.py中，第89行与107行加入了with torch.no_grad().直接运行上面的训练语句，即可进行训练，然后就会出现之前的错误结果。
-<img width="868" alt="image" src="https://github.com/CC-Vltava/enlarge_llama/assets/84649088/17406952-2356-4aaf-9782-a8a37e02ba12">### Enlarge LLaMA Model
+
+<img width="868" alt="image" src="https://github.com/CC-Vltava/enlarge_llama/assets/84649088/17406952-2356-4aaf-9782-a8a37e02ba12">
+
 <img width="1273" alt="image" src="https://github.com/CC-Vltava/enlarge_llama/assets/84649088/203dd09f-55a7-43e5-8b8b-339864243773">
