@@ -20,8 +20,20 @@ from new_model.model import GPT
 import json
 from datasets import load_dataset
 from langdetect import detect
+import shutil
 
-load_from_pretrained=False
+# load_from_pretrained=True
+
+def count_parameters(model, name=''):
+    for p in model.parameters():
+        print('type {}'.format(p.dtype))
+        break
+    tot_bf16 = sum(p.numel() for p in model.parameters() if type(p) == torch.float32)
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    frozen_params = sum(p.numel() for p in model.parameters() if not p.requires_grad)
+    total_params = trainable_params + frozen_params
+    print('bf16 {}\ntotal paras: {}\ntrainable paras: {}\nfrozen paras: {}'.format(tot_bf16, total_params, trainable_params, frozen_params))
+    return total_params, trainable_params, frozen_params
 
 import transformers
 from transformers import (
@@ -40,68 +52,26 @@ from transformers import (
 )
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
 
+from torch.utils.tensorboard import SummaryWriter
+
+# try:
+# shutil.rmtree('runs/mock_accuracy')
+#     print("目录删除成功。")
+# except FileNotFoundError:
+#     print("目录不存在，无需删除。")
+# except Exception as e:
+#     print("删除目录时发生错误:", e)
+    
+
+writer = SummaryWriter(log_dir='runs/mock_accuracy')
+
 logger = get_logger(__name__)
 
-def read_data_wiki():
-    data_list = []
-
-    data_path = '/data1/cchuan/wiki_data/wiki_0001_.json'
-    print('wiki dataset')
-    print(data_path)
-
-    with open(data_path, 'r') as file:
-        data_list = json.load(file)
-    # print(data_list)
-    # print(len(data_list))
-    print('raw data size')
-    print(len(data_list['train']))
-
-    formatted_data = {
-        "train": [{"prompt": item["input"], "completion": item["output"]} for item in data_list['train']],
-        "test": [{"prompt": item["input"], "completion": item["output"]} for item in data_list['validation']],
-    }
-
-    save_data_path = '/data1/cchuan/output_file.json'
-
-    with open(save_data_path, 'w') as json_file:
-        json.dump(formatted_data, json_file, indent=4)
-    
-    # raise 'error'
-    print('finish reading')
-
-    return load_dataset('json', data_files=save_data_path, field='train')
-
-def read_data_tulu():
-    data_list = []
-
-    data_path = '/data1/cchuan/tulu/tulu.json'
-    print('tulu dataset')
-    with open(data_path, 'r') as file:
-        for line in file:
-            data = json.loads(line)
-            data_list.append(data)
-    
-    print('raw data size')
-    print(len(data_list[0]['train']))
-
-    formatted_data = {
-        "train": [{"prompt": item["input"], "completion": item["output"]} for item in data_list[0]['train'][: 30]],
-        "test": [{"prompt": item["input"], "completion": item["output"]} for item in data_list[0]['train'][: 30]],
-    }
-
-    save_data_path = '/data1/cchuan/output_file.json'
-
-    with open(save_data_path, 'w') as json_file:
-        json.dump(formatted_data, json_file, indent=4)
-    
-    print('finish reading')
-
-    return load_dataset('json', data_files=save_data_path, field='train')
 
 def preprocess_function(examples):
     inputs = str(examples['instruction']) + " " + str(examples['input'])
     outputs = str(examples['output'])
-    return {'prompt': inputs, 'completion': outputs}
+    return {'input': inputs, 'output': outputs}
 
 def read_data_tiger():
     print('tiger dataset')
@@ -113,22 +83,32 @@ def read_data_tiger():
         num_proc=16
     )
 
+def read_data(path):
+    if 'tiger' in path:
+        return read_data_tiger()
+    return load_dataset('json', data_files=path, field='train')
+
+
 def collate_fn(batch):
     # batch是一个包含单个样本的列表，每个样本是一个字典{'input': input_sequence, 'labels': target_sequence}
 
     # 提取输入和标签
-    inputs = [item['input_ids'] for item in batch]
+    xlmr_input_ids = [item['xlmr_input_ids'] for item in batch]
+    xlmr_attention_mask = [item['xlmr_attention_mask'] for item in batch]
+    llama_input_ids = [item['llama_input_ids'] for item in batch]
+    llama_attention_mask = [item['llama_attention_mask'] for item in batch]
+    MSE_input_ids = [item['MSE_input_ids'] for item in batch]
+    MSE_attention_mask = [item['MSE_attention_mask'] for item in batch]
     labels = [item['labels'] for item in batch]
-    atts = [item['attention_mask'] for item in batch]
-    input2 = [item['sec_input_ids'] for item in batch]
-    llama_input = [item['llama_input'] for item in batch]
 
     return {
-        'input_ids': torch.stack(inputs), 
-        'labels': torch.stack(labels), 
-        'attention_mask': torch.stack(atts),
-        'sec_input_ids':  torch.stack(input2),
-        'llama_input': torch.stack(llama_input)
+        'xlmr_input_ids': torch.cat(xlmr_input_ids, dim=0), 
+        'xlmr_attention_mask': torch.cat(xlmr_attention_mask, dim=0),
+        'llama_input_ids':  torch.cat(llama_input_ids, dim=0),
+        'llama_attention_mask': torch.cat(llama_attention_mask, dim=0),
+        'MSE_input_ids':  torch.cat(MSE_input_ids, dim=0),
+        'MSE_attention_mask': torch.cat(MSE_attention_mask, dim=0),
+        'labels': torch.cat(labels, dim=0)
     }
 
 
@@ -342,47 +322,48 @@ def encode_with_prompt_completion_format(example, encode_tokenizer, decode_token
     # print(example)
 
     # xlmr中自己带有eos token
-    input_ids1 = encode_tokenizer(
-        example['prompt'], 
+    encode_tokenizer.padding_side='left'
+    xlmr_input = encode_tokenizer(
+        example['input'], 
         return_tensors='pt', 
-        max_length=max_seq_length, 
+        max_length=max_seq_length,
         truncation=True,
-        padding='longest'
-    )['input_ids']
+        padding='max_length'
+    )
 
-    input_ids2 = decode_tokenizer(
-        example['completion'] + decode_tokenizer.eos_token, 
+    decode_tokenizer.padding_side='right'
+    llama_input = decode_tokenizer(
+        example['output'] + decode_tokenizer.eos_token, 
         return_tensors='pt', 
         max_length=max_seq_length, 
         truncation=True,
-        padding='longest'
-    )['input_ids']
-
-    input_ids3 = decode_tokenizer(
-        example['prompt'] + decode_tokenizer.eos_token, 
-        return_tensors='pt', 
-        max_length=max_seq_length, 
-        truncation=True,
-        padding='longest'
-    )['input_ids']
+        padding='max_length'
+    )
 
     labels = decode_tokenizer(
-        example['completion'] + decode_tokenizer.eos_token, 
+        example['output'] + decode_tokenizer.eos_token, 
         return_tensors='pt', 
         max_length=max_seq_length, 
         truncation=True,
-        padding='longest'
-    )['input_ids']
-    
-    pad_length = input_ids1.shape[1]
-
-    pad_labels = torch.ones((labels.shape[0], pad_length), dtype=labels.dtype) * -100
-
+        padding='max_length'
+    )
+    indices = (labels['attention_mask'] == 0)
+    labels['input_ids'][indices] = -100
+    labels = labels['input_ids']
+    pad_labels = torch.ones((1, max_seq_length), dtype=labels.dtype) * -100
     labels = torch.cat([pad_labels, labels], dim=1)
 
-    attention_mask = torch.ones_like(input_ids1)
+    decode_tokenizer.padding_side='left'
+    MSE_input = decode_tokenizer(
+        example['input'], 
+        return_tensors='pt', 
+        max_length=max_seq_length, 
+        truncation=True,
+        padding='max_length'
+    )
+    MSE_input_ids = torch.cat([MSE_input['input_ids'], llama_input['input_ids']], dim=1)
+    MSE_attention_mask = torch.cat([MSE_input['attention_mask'], llama_input['attention_mask']], dim=1)
 
-    assert labels.shape[1] == input_ids1.shape[1] + input_ids2.shape[1], 'error!'
 
     def is_english(sentence):
         try:
@@ -392,14 +373,16 @@ def encode_with_prompt_completion_format(example, encode_tokenizer, decode_token
             return False
     
     return {
-        'input_ids': input_ids1.flatten(),
-        'labels': labels.flatten(),
-        'attention_mask': attention_mask.flatten(),
-        'sec_input_ids': input_ids2.flatten(),
-        'language': is_english(example['prompt']) and is_english(example['completion']),
-        'llama_input': input_ids3.flatten(),
-        'input': example['prompt'],
-        'output': example['completion']
+        'xlmr_input_ids': xlmr_input['input_ids'],
+        'xlmr_attention_mask': xlmr_input['attention_mask'],
+        'labels': labels,
+        'llama_input_ids': llama_input['input_ids'],
+        'llama_attention_mask': llama_input['attention_mask'],
+        'MSE_input_ids': MSE_input_ids,
+        'MSE_attention_mask': MSE_attention_mask,
+        'language': is_english(example['input']) and is_english(example['output']),
+        'input': example['input'],
+        'output': example['output']
     }
 
 
@@ -451,53 +434,17 @@ def main():
     
     accelerator.wait_for_everyone()
 
-
-    raw_datasets = read_data_wiki()
+    raw_datasets = read_data(args.train_file)
 
     model = GPT()
+    model = model.to(torch.float16)
+    model.llama_model.enable_input_require_grads()
+    model.xlmr.enable_input_require_grads()
 
-    if load_from_pretrained:
-        model_weights = torch.load(os.path.join(args.output_dir, '3/pytorch_model.bin'), map_location=torch.device('cuda'))
-        model.load_state_dict(model_weights)
-
-    # model.load_model('/data1/cchuan/model_weight/11.13_GPT_7B/6/pytorch_model.bin')
 
     encode_tokenizer = AutoTokenizer.from_pretrained('/data1/cchuan/data/weight/xlmr/')
-    decode_tokenizer = AutoTokenizer.from_pretrained('/data1/cchuan/data/weight/tiny_llama/')
-
-
-    # if args.model_name_or_path:
-    #     if args.use_qlora:
-    #         bnb_config = BitsAndBytesConfig(
-    #             load_in_4bit=True,
-    #             bnb_4bit_use_double_quant=True,
-    #             bnb_4bit_quant_type="nf4",
-    #             bnb_4bit_compute_dtype=torch.bfloat16,
-    #         )
-    #         device_index = accelerator.local_process_index
-    #         device_map = {"": device_index} # force data-parallel training.
-    #         model = AutoModelForCausalLM.from_pretrained(
-    #             args.model_name_or_path,
-    #             from_tf=bool(".ckpt" in args.model_name_or_path),
-    #             config=config,
-    #             load_in_4bit=True,
-    #             quantization_config=bnb_config,
-    #             device_map=device_map,
-    #             torch_dtype=torch.bfloat16,
-    #             use_flash_attention_2=True if args.use_flash_attn else False,
-    #         )
-    #     else:
-    #         model = AutoModelForCausalLM.from_pretrained(
-    #             args.model_name_or_path,
-    #             from_tf=bool(".ckpt" in args.model_name_or_path),
-    #             config=config,
-    #             low_cpu_mem_usage=args.low_cpu_mem_usage,
-    #             use_flash_attention_2=True if args.use_flash_attn else False,
-    #         )
-    # else:
-    #     logger.info("Training new model from scratch")
-    #     model = AutoModelForCausalLM.from_config(config)
-
+    decode_tokenizer = AutoTokenizer.from_pretrained('/data1/cchuan/tiny_llama/fix/')
+    
 
     decode_tokenizer.add_special_tokens({
         "bos_token": "<s>",
@@ -513,43 +460,11 @@ def main():
     for param in model.llama_model.parameters():
         param.requires_grad = False
 
-    # # no default pad token for llama!
-    # # here we add all special tokens again, because the default ones are not in the special_tokens_map
-    # if isinstance(tokenizer, LlamaTokenizer) or isinstance(tokenizer, LlamaTokenizerFast):
-    #     num_added_tokens = tokenizer.add_special_tokens({
-    #         "bos_token": "<s>",
-    #         "eos_token": "</s>",
-    #         "unk_token": "<unk>",
-    #         "pad_token": "<pad>",
-    #     })
-    #     assert num_added_tokens in [0, 1], "LlamaTokenizer should only add one special token - the pad_token, or no tokens if pad token present."
-    # elif isinstance(tokenizer, GPTNeoXTokenizerFast):
-    #     num_added_tokens = tokenizer.add_special_tokens({
-    #         "pad_token": "<pad>",
-    #     })
-    #     assert num_added_tokens == 1, "GPTNeoXTokenizer should only add one special token - the pad_token."
-    # elif isinstance(tokenizer, GPT2Tokenizer) and isinstance(model, OPTForCausalLM):
-    #     num_added_tokens = tokenizer.add_special_tokens({'unk_token': '<unk>'})
 
-    # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
-    # on a small vocab and want a smaller embedding size, remove this test.
-
-
-    # if args.use_lora:
-    #     if args.use_qlora:
-    #         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
-
-    #     logger.info("Initializing LORA model...")
-    #     peft_config = LoraConfig(
-    #         task_type=TaskType.CAUSAL_LM, 
-    #         inference_mode=False, 
-    #         r=args.lora_rank, 
-    #         lora_alpha=args.lora_alpha, 
-    #         lora_dropout=args.lora_dropout,
-    #         target_modules=["q_proj", "o_proj", "v_proj", "k_proj", "gate_proj", "up_proj", "down_proj"]
-    #     )
-    #     model = get_peft_model(model, peft_config)
-    #     model.print_trainable_parameters()
+    if accelerator.is_main_process:
+        print('model config')
+        total_params, trainable_params, frozen_params = count_parameters(model)
+        print('total paras: {}\ntrainable paras: {}\nfrozen paras: {}'.format(total_params, trainable_params, frozen_params))
 
     # Preprocessing the datasets.
     encode_function = partial(
@@ -561,8 +476,6 @@ def main():
 
 
     with accelerator.main_process_first():
-        # print('The size of raw data')
-        # print(len(raw_datasets['train']))
         lm_datasets = raw_datasets.map(
             encode_function,
             batched=False,
@@ -579,24 +492,16 @@ def main():
     
     train_dataset = lm_datasets['train']
 
-    if accelerator.is_local_main_process:
-        print('ccccccccc')
-        print(train_dataset[0]['input'])
-        print(train_dataset[0]['output'])
-
 
 
     # Log a few random samples from the training set:
-    # print('ccccccc')
-    # print(len(train_dataset))
-    # print(train_dataset)
+    print('ccccccc')
+    print(len(train_dataset))
+    print(train_dataset)
     for index in random.sample(range(len(train_dataset)), 3):
         logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
         print(f"Sample {index} of the training set: {train_dataset[index]}.")
 
-    # print('ccccccc')
-    # print(len(train_dataset))
-    # print(train_dataset)
 
     # DataLoaders creation:
     train_dataloader = DataLoader(
@@ -744,6 +649,7 @@ def main():
     progress_bar.update(completed_steps)
 
     cnt = 0
+    total_steps = 0
     for epoch in range(starting_epoch, args.num_train_epochs):
         model.train()
         total_loss = 0
@@ -760,10 +666,19 @@ def main():
             active_dataloader = train_dataloader
         for step, batch in enumerate(active_dataloader):
             with accelerator.accumulate(model):
-                loss = model(**batch)   
+                # print('type of batch{}'.format(type(batch)))
+                loss = model(**batch)
                 # loss = outputs.loss
                 # We keep track of the loss at each logged step
-                total_loss += loss.detach().float()
+                loss_value = loss.detach().float()
+                total_loss += loss_value
+                if accelerator.is_main_process:
+                    total_steps += 1
+                    writer.add_scalar(
+                        tag="loss", # 可以暂时理解为图像的名字
+                        scalar_value=loss_value,  # 纵坐标的值
+                        global_step=total_steps  # 当前是第几次迭代，可以理解为横坐标的值
+                    )
                 accelerator.backward(loss)
                 # clip gradient norm. don't do this with deepspeed
                 if accelerator.sync_gradients and args.clip_grad_norm > 0:

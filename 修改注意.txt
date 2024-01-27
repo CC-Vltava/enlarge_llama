@@ -1,0 +1,6 @@
+﻿1. 在model.py中更改tiny_llama路径、是否使用MSE loss
+2. 在scripts/finetune_with.sh文件中修改训练文件路径，GPU，output_dir
+3. 在finetune.py中更改是否冻结所有训练参数
+4. 在command.txt中修改文件输出位置
+5. 在proj.py中修改是否使用知识蒸馏
+6. 对于新的数据集，需要将数据集修改为指定格式

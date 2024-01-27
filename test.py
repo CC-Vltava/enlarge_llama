@@ -6,16 +6,14 @@ from accelerate import Accelerator
 import os
 import torch.nn as nn
 
-p1 = "/data1/cchuan/data/weight/tiny_llama/"
-p2 = './tiny_llama/'
-p3 = '/home/cchuan/Project/qlora/tiny_llama/'
+path = "/data1/cchuan/tiny_llama/fix"
 
-PATH_TO_CONVERTED_MODEL=p3
+PATH_TO_CONVERTED_MODEL=path
 PATH_TO_CONVERTED_TOKENIZER1='/data1/cchuan/data/weight/xlmr/'
-PATH_TO_CONVERTED_TOKENIZER2='/data1/cchuan/data/weight/tiny_llama'
+PATH_TO_CONVERTED_TOKENIZER2=path
 
 
-weight_path = '/data1/cchuan/model_weight/1.4_GPT_7B/2/pytorch_model.bin'
+weight_path = '/data1/cchuan/new_weight/2batch_tiger/test_GPT_7B/5/pytorch_model.bin'
 
 encode_tokenizer = AutoTokenizer.from_pretrained(PATH_TO_CONVERTED_TOKENIZER1)
 decode_tokenizer = AutoTokenizer.from_pretrained(PATH_TO_CONVERTED_TOKENIZER2)

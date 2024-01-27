@@ -13,7 +13,7 @@ from fairseq import utils
 class GPT(nn.Module):
     def __init__(
             self,
-            llama_model_path='/home/cchuan/Project/qlora/tiny_llama/',
+            llama_model_path='/data1/cchuan/data/weight/vicuna',
             # llama_model_path='/data1/cchuan/data/weight/tiny_llama/',
             xlmr_model_path='/data1/cchuan/data/weight/xlmr/',
             mid_hidden_size=512,
@@ -37,11 +37,6 @@ class GPT(nn.Module):
         for param in self.llama_model.parameters():
             param.requires_grad = False
 
-        # 不确定
-        # stop_words_ids = [torch.tensor([835]).to(self.device),
-        #                   torch.tensor([2277, 29937]).to(self.device)]  # '###' can be encoded in two different ways.
-        # self.stopping_criteria = StoppingCriteriaList([StoppingCriteriaSub(stops=stop_words_ids)])
-
 
     def get_input_embeddings(self):
         return self.llama_model.get_input_embeddings()
@@ -62,18 +57,6 @@ class GPT(nn.Module):
 
         llama_input_embs = self.proj(hidden_states)
 
-        # output_file_path = '/data1/cchuan/input.txt'
-
-        # # 将 Tensor 写入文本文件
-        # with open(output_file_path, 'w') as file:
-        #     # 将 Tensor 转换为字符串，并写入文件
-        #     file.write(str(llama_input_embs.tolist()))
-
-        # # generate_ids = self.llama_model.generate(
-        # #     inputs_embeds=llama_input_embs,
-        # #     max_new_tokens=30,
-        # # )
-
         generate_ids = self.llama_model.generate(
             inputs_embeds=llama_input_embs,
             max_new_tokens=max_new_tokens,
@@ -88,135 +71,47 @@ class GPT(nn.Module):
         )
 
         return generate_ids
-        
-
-    def calc_MSE_loss(self, model, input, sec_input, label):
-        final_input = torch.cat([input, sec_input], dim=1)
-        
-        shape = final_input.shape
-        input_length = input.shape[1]
-        label_length = sec_input.shape[1]
-
-        attention_mask = torch.zeros([shape[0], shape[1]])
-        attention_mask[:, :input_length] = 1
-        # print('final input {}'.format(final_input.shape))
-        output = torch.stack(
-            model(
-                input_ids=final_input,
-                attention_mask=attention_mask,
-                return_dict=True,
-                output_hidden_states=True
-            ).hidden_states
-        )
-
-        # print('ccccccc')
-        # print(output.shape, label.shape)
-        # print(output[:, :, -label_length: ].shape, label[:, :, -label_length: ].shape)
-
-        mse_loss = F.mse_loss(output[-1, :, -label_length: ], label[-1, :, -label_length: ])
-
-        return mse_loss
-
+    
 
     def forward(
         self,
-        input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
+        xlmr_input_ids: torch.LongTensor = None,
+        xlmr_attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.LongTensor] = None,
-        sec_input_ids: torch.float = None,
-        llama_input: torch.float = None,
+        llama_input_ids: torch.float = None,
+        llama_attention_mask: torch.float = None,
+        MSE_input_ids: torch.float = None,
+        MSE_attention_mask: torch.float = None,
     ):
-        
-        hidden_states = self.xlmr(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True
-        ).hidden_states
+        # print('cc nb')
+        # print(xlmr_input_ids.shape)
+        # print(xlmr_attention_mask.shape)
+        with torch.no_grad():
+            hidden_states = self.xlmr(
+                input_ids=xlmr_input_ids,
+                attention_mask=xlmr_attention_mask,
+                output_hidden_states=True
+            ).hidden_states
 
-        input_embed = self.proj(hidden_states)
-        input_length = input_embed.shape[1]
+        fir_input_embed = self.proj(hidden_states)
 
-        sec_input_embed = self.llama_model.model.embed_tokens(sec_input_ids)\
-            .to(input_embed.dtype)
+        # input_length = input_embed.shape[1]
 
-        llama_input_embed = torch.cat([input_embed, sec_input_embed], dim=1)
+        sec_input_embed = self.llama_model.model.embed_tokens(llama_input_ids)\
+            .to(fir_input_embed.dtype)
 
-        shape = llama_input_embed.shape
+        input_embed = torch.cat([fir_input_embed, sec_input_embed], dim=1)
 
-        attention_mask = torch.zeros([shape[0], shape[1]])
-        attention_mask[:, :input_length] = 1
+        attention_mask = torch.cat([xlmr_attention_mask, llama_attention_mask], dim=1)
 
-        outputs = self.llama_model(
-            inputs_embeds=llama_input_embed,
-            # 这里的attention需要修改
-            attention_mask=attention_mask,
-            return_dict=True,
-            output_hidden_states=True,
-            labels=labels
-        )
+        with torch.no_grad():
+            outputs = self.llama_model(
+                inputs_embeds=input_embed,
+                # 这里的attention需要修改
+                attention_mask=attention_mask,
+                return_dict=True,
+                output_hidden_states=True,
+                labels=labels
+            )
 
-        # print('here!!!')
-        # print('llama_input {}'.format(llama_input.shape))
-        # print('input {}'.format(input_embed.shape))
-        # print('sec_input {}'.format(sec_input_ids.shape))
-        # print('label {}'.format(labels.shape))
-        # print('output {}'.format(outputs.hidden_states[-1].shape))
-        MSE_loss = self.calc_MSE_loss(self.llama_model, llama_input, sec_input_ids, torch.stack(outputs.hidden_states))
-
-        my_lambda = 4
-        # print('compare')
-        # print(outputs.loss, MSE_loss)
-
-        return outputs.loss + my_lambda * MSE_loss
-    
-
-    
-
-
-# model = GPT()
-
-# # print('hello')
-# input = [
-#     'heallo',
-#     '123 123 12 3123 123 123 123 '
-# ]
-# labels = [
-#     '1jbjj ijr ',
-#     '32kfjhu howihr ohdough ewruh weiuh 23o4iruh 324oiu'
-# ]
-# encode_tokenizer = AutoTokenizer.from_pretrained('/data1/cchuan/data/weight/xlmr/')
-# decode_tokenizer = AutoTokenizer.from_pretrained('/data1/cchuan/data/weight/tiny_llama/')
-
-# max_seq_length=256
-
-# intput_data = encode_tokenizer(
-#     labels, 
-#     return_tensors='pt', 
-#     max_length=max_seq_length, 
-#     truncation=True,
-#     padding="max_length",
-# )
-
-# num_added_tokens = decode_tokenizer.add_special_tokens({
-#     "bos_token": "<s>",
-#     "eos_token": "</s>",
-#     "unk_token": "<unk>",
-#     "pad_token": "<pad>",
-# })
-
-# embedding_size = model.get_input_embeddings().weight.shape[0]
-# if len(decode_tokenizer) > embedding_size:
-#     model.llama_model.resize_token_embeddings(len(decode_tokenizer))
-
-# labels_data = decode_tokenizer(
-#     labels, 
-#     return_tensors='pt', 
-#     max_length=max_seq_length, 
-#     truncation=True,
-#     padding="max_length"
-# )
-
-# outputs = model(intput_data['input_ids'], intput_data['attention_mask'], labels_data['input_ids'])
-
-# print(outputs.loss)
-        
+            return outputs.loss

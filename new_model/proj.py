@@ -49,7 +49,7 @@ class proj(nn.Module):
 
         config = XLMRobertaConfig(**config_dict)
 
-        self.transformer = XLMRobertaModel(config)
+        # self.transformer = XLMRobertaModel(config)
 
         self.para = para(input_length=num_hidden_layers)
 
@@ -65,8 +65,7 @@ class proj(nn.Module):
     def forward(self, hidden_states):
         # 在这个简单的例子中，前向传播直接使用线性层
         # print(x.size())
-        # x = self.transformer(inputs_embeds=x).last_hidden_state
+        # x = self.transformer(inputs_embeds=hidden_states[-1]).last_hidden_state
         # x = self.para(hidden_states)
-        x = hidden_states[-1]
-        x = self.proj(x)
+        x = self.proj(hidden_states[-1])
         return x
