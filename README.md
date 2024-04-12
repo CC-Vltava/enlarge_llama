@@ -11,3 +11,8 @@ Train:
     --use_slow_tokenizer \
     --train_file data/processed/tulu_v1/tulu_v1_data.jsonl \
 ```
+
+环境：
+python3.10，直接安装requirements.txt
+如果出现flash attention错误，运行
+pip3 install https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.0/flash_attn-2.3.0+cu117torch2.0cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
