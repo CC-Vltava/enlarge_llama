@@ -35,3 +35,6 @@ alpaca-eval==0.3.1
 flask
 vllm 
 openpyxl
+langdetect
+fairseq
+partial

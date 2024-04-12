@@ -13,8 +13,8 @@ from fairseq import utils
 class GPT(nn.Module):
     def __init__(
             self,
-            llama_model_path='/data1/cchuan/data/weight/vicuna',
-            # llama_model_path='/data1/cchuan/data/weight/tiny_llama/',
+            # llama_model_path='/data1/cchuan/data/weight/vicuna',
+            llama_model_path='/data1/cchuan/data/weight/tiny_llama/',
             xlmr_model_path='/data1/cchuan/data/weight/xlmr/',
             mid_hidden_size=512,
         ):
@@ -28,12 +28,12 @@ class GPT(nn.Module):
         self.proj = proj(
             input_size=feature_size,
             output_size=self.llama_model.config.hidden_size,
-            mid_hidden_size=mid_hidden_size,
-            num_hidden_layers=len(self.xlmr.encoder.layer) + 1
+            mid_hidden_size=mid_hidden_size
         )
 
         for param in self.xlmr.parameters():
             param.requires_grad = False
+
         for param in self.llama_model.parameters():
             param.requires_grad = False
 
@@ -79,23 +79,16 @@ class GPT(nn.Module):
         xlmr_attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.LongTensor] = None,
         llama_input_ids: torch.float = None,
-        llama_attention_mask: torch.float = None,
-        MSE_input_ids: torch.float = None,
-        MSE_attention_mask: torch.float = None,
+        llama_attention_mask: torch.float = None
     ):
-        # print('cc nb')
-        # print(xlmr_input_ids.shape)
-        # print(xlmr_attention_mask.shape)
-        with torch.no_grad():
-            hidden_states = self.xlmr(
-                input_ids=xlmr_input_ids,
-                attention_mask=xlmr_attention_mask,
-                output_hidden_states=True
-            ).hidden_states
+        
+        hidden_states = self.xlmr(
+            input_ids=xlmr_input_ids,
+            attention_mask=xlmr_attention_mask,
+            output_hidden_states=True
+        ).hidden_states
 
         fir_input_embed = self.proj(hidden_states)
-
-        # input_length = input_embed.shape[1]
 
         sec_input_embed = self.llama_model.model.embed_tokens(llama_input_ids)\
             .to(fir_input_embed.dtype)
@@ -104,14 +97,13 @@ class GPT(nn.Module):
 
         attention_mask = torch.cat([xlmr_attention_mask, llama_attention_mask], dim=1)
 
-        with torch.no_grad():
-            outputs = self.llama_model(
-                inputs_embeds=input_embed,
-                # 这里的attention需要修改
-                attention_mask=attention_mask,
-                return_dict=True,
-                output_hidden_states=True,
-                labels=labels
-            )
+        outputs = self.llama_model(
+            inputs_embeds=input_embed,
+            # 这里的attention需要修改
+            attention_mask=attention_mask,
+            return_dict=True,
+            output_hidden_states=True,
+            labels=labels
+        )
 
-            return outputs.loss
+        return outputs.loss

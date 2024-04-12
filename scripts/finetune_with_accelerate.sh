@@ -1,7 +1,7 @@
-export CUDA_VISIBLE_DEVICES=2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0
 
 MODEL_SIZE=7B
-NUM_GPUS=6
+NUM_GPUS=1
 BATCH_SIZE_PER_GPU=1
 TOTAL_BATCH_SIZE=256
 GRADIENT_ACC_STEPS=$(($TOTAL_BATCH_SIZE/$NUM_GPUS/$BATCH_SIZE_PER_GPU))
@@ -18,7 +18,7 @@ accelerate launch \
     --use_flash_attn \
     --tokenizer_name ../hf_llama_models/${MODEL_SIZE} \
     --use_slow_tokenizer \
-    --train_file /data1/cchuan/tulu/tiger.json \
+    --train_file /data1/cchuan/tulu/test_tulu.json \
     --max_seq_length 512 \
     --preprocessing_num_workers 16 \
     --per_device_train_batch_size $BATCH_SIZE_PER_GPU \

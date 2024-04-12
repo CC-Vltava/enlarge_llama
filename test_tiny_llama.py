@@ -1,12 +1,11 @@
 ﻿from transformers import AutoTokenizer, LlamaForCausalLM
 import torch
 
-path = '/home/cchuan/Project/qlora/tiny_llama/'
 path1 = '/data1/cchuan/data/weight/tiny_llama/'
 path2 = '/data/ghchen/models/llama2'
 
-model = LlamaForCausalLM.from_pretrained(path)
-tokenizer = AutoTokenizer.from_pretrained(path)
+model = LlamaForCausalLM.from_pretrained(path1)
+tokenizer = AutoTokenizer.from_pretrained(path1)
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
